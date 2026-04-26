@@ -1,0 +1,8 @@
+.DS_Store
+.venv/
+.claude/
+*.app/
+__pycache__/
+*.pyc
+config.json
+*.dmg

@@ -1,0 +1,11 @@
+{
+  "use_groq": false,
+  "streaming_mode": false,
+  "groq_api_key": "",
+  "language": "",
+  "use_claude_fixup": false,
+  "model_size": "base",
+  "beam_size": 5,
+  "vad_filter": true,
+  "claude_api_key": ""
+}
