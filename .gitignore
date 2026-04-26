@@ -1,9 +1,25 @@
+# macOS
 .DS_Store
+
+# Python
 .venv/
-.claude/
-*.app/
 __pycache__/
 *.pyc
-config.json
+*.pyo
+dist/
+
+# Build artifacts
+*.app/
 *.dmg
-.tasks
+*.spec
+
+# Config (contains API keys)
+config.json
+
+# Claude Code
+.claude/
+CLAUDE.md
+tasks.md
+
+# Temp build files
+/tmp/murmur_build/

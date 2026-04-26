@@ -26,5 +26,7 @@
 	<string>Murmur needs the microphone to record your voice for transcription.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>LSUIElement</key>
+	<true/>
 </dict>
 </plist>

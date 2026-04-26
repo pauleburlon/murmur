@@ -1,6 +1,7 @@
 import SwiftUI
 import ApplicationServices
 import CoreGraphics
+import ServiceManagement
 
 private let projectRoot: URL = Bundle.main.resourceURL ?? Bundle.main.bundleURL.deletingLastPathComponent()
 
@@ -16,6 +17,10 @@ struct Config: Codable, Equatable {
     var streamingMode:  Bool   = false
     var useClaudeFixup: Bool   = false
     var claudeApiKey:   String = ""
+    var hotkeyCode:       Int    = 61
+    var hotkeyIsModifier: Bool   = true
+    var hotkeyModifiers:  Int    = 0
+    var hotkeyLabel:      String = "Right ⌥"
 
     enum CodingKeys: String, CodingKey {
         case modelSize      = "model_size"
@@ -27,6 +32,10 @@ struct Config: Codable, Equatable {
         case streamingMode  = "streaming_mode"
         case useClaudeFixup = "use_claude_fixup"
         case claudeApiKey   = "claude_api_key"
+        case hotkeyCode       = "hotkey_code"
+        case hotkeyIsModifier = "hotkey_is_modifier"
+        case hotkeyModifiers  = "hotkey_modifiers"
+        case hotkeyLabel      = "hotkey_label"
     }
 }
 
@@ -85,6 +94,12 @@ struct MurmurApp: App {
         }
         .windowResizability(.contentMinSize)
         .commands { CommandGroup(replacing: .newItem) {} }
+
+        MenuBarExtra {
+            MenuBarMenu(runner: runner)
+        } label: {
+            MenuBarIcon(state: runner.appState)
+        }
     }
 }
 
@@ -100,13 +115,17 @@ final class ScriptRunner: ObservableObject {
             saveConfig(config)
             if config.modelSize != oldValue.modelSize ||
                config.useGroq   != oldValue.useGroq { restart() }
+            let hotkeyChanged = config.hotkeyCode       != oldValue.hotkeyCode ||
+                               config.hotkeyIsModifier != oldValue.hotkeyIsModifier ||
+                               config.hotkeyModifiers  != oldValue.hotkeyModifiers
+            if hotkeyChanged { reinstallHotkey() }
         }
     }
 
     private var process:        Process?
     private var stdinHandle:    FileHandle?
-    private var eventMonitor:   Any?
-    private var rightOptionDown = false
+    private var eventMonitors:  [Any] = []
+    private var isHotkeyDown    = false
     private var streamedText    = ""
     private var resetTimer:     Timer?
     private var elapsedTimer:   Timer?
@@ -155,7 +174,7 @@ final class ScriptRunner: ObservableObject {
             status = "Failed to launch: \(error.localizedDescription)"
             appState = .error; return
         }
-        if eventMonitor == nil { setupHotkey() }
+        if eventMonitors.isEmpty { setupHotkey() }
     }
 
     func toggleRecording() {
@@ -186,7 +205,7 @@ final class ScriptRunner: ObservableObject {
                     t.invalidate()
                     DispatchQueue.main.async {
                         self.installMonitor()
-                        self.status = "Hold Right ⌥ to dictate"
+                        self.status = "Hold \(self.config.hotkeyLabel) to dictate"
                         self.appState = .ready
                     }
                 }
@@ -197,13 +216,57 @@ final class ScriptRunner: ObservableObject {
     }
 
     private func installMonitor() {
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            guard let self, event.keyCode == 61 else { return }
-            let isDown = event.modifierFlags.contains(.option)
-            guard isDown != self.rightOptionDown else { return }
-            self.rightOptionDown = isDown
-            self.send(isDown ? "START" : "STOP")
+        let code = UInt16(config.hotkeyCode)
+
+        if config.hotkeyIsModifier {
+            let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                guard let self, event.keyCode == code else { return }
+                let isDown: Bool
+                switch code {
+                case 58, 61: isDown = event.modifierFlags.contains(.option)
+                case 55, 54: isDown = event.modifierFlags.contains(.command)
+                case 59, 62: isDown = event.modifierFlags.contains(.control)
+                case 56, 60: isDown = event.modifierFlags.contains(.shift)
+                default:     isDown = false
+                }
+                guard isDown != self.isHotkeyDown else { return }
+                self.isHotkeyDown = isDown
+                self.send(isDown ? "START" : "STOP")
+            }
+            if let m { eventMonitors.append(m) }
+        } else {
+            let requiredMods = UInt(config.hotkeyModifiers)
+            let downMon = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, event.keyCode == code, !self.isHotkeyDown else { return }
+                let mods = event.modifierFlags.intersection([.control, .option, .shift, .command]).rawValue
+                guard mods == requiredMods else { return }
+                self.isHotkeyDown = true
+                self.send("START")
+            }
+            let upMon = NSEvent.addGlobalMonitorForEvents(matching: .keyUp) { [weak self] event in
+                guard let self, event.keyCode == code, self.isHotkeyDown else { return }
+                self.isHotkeyDown = false
+                self.send("STOP")
+            }
+            if let m = downMon { eventMonitors.append(m) }
+            if let m = upMon   { eventMonitors.append(m) }
         }
+    }
+
+    private func reinstallHotkey() {
+        eventMonitors.forEach { NSEvent.removeMonitor($0) }
+        eventMonitors = []
+        isHotkeyDown = false
+        if AXIsProcessTrusted() { installMonitor() }
+    }
+
+    func applyHotkey(code: Int, isModifier: Bool, modifiers: Int, label: String) {
+        var updated              = config
+        updated.hotkeyCode       = code
+        updated.hotkeyIsModifier = isModifier
+        updated.hotkeyModifiers  = modifiers
+        updated.hotkeyLabel      = label
+        config = updated   // single assignment → didSet fires once
     }
 
     private func send(_ cmd: String) {
@@ -231,7 +294,7 @@ final class ScriptRunner: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self, self.appState == .done else { return }
                     self.appState = .ready
-                    self.status   = "Hold Right ⌥ to dictate"
+                    self.status   = "Hold \(self.config.hotkeyLabel) to dictate"
                 }
             }
 
@@ -265,7 +328,7 @@ final class ScriptRunner: ObservableObject {
             appState = .transcribing
 
         } else if line == "Model ready." {
-            status = "Hold Right ⌥ to dictate"
+            status = "Hold \(self.config.hotkeyLabel) to dictate"
             appState = .ready
 
         } else if line.hasPrefix("(no speech") {
@@ -285,7 +348,7 @@ final class ScriptRunner: ObservableObject {
 
     deinit {
         process?.terminate()
-        if let m = eventMonitor { NSEvent.removeMonitor(m) }
+        eventMonitors.forEach { NSEvent.removeMonitor($0) }
     }
 }
 
@@ -704,20 +767,19 @@ struct SettingsDrawer: View {
 
     private var hotkeyTab: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Current hotkey")
-                .font(.caption.bold()).foregroundStyle(theme.ink3)
-            HStack(spacing: 8) {
-                Text("Right ⌥")
-                    .font(.system(.callout, design: .monospaced))
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(theme.paper2)
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7)
-                        .stroke(theme.hair, lineWidth: 0.5))
-                Spacer()
+            HotkeyRecorder(currentLabel: runner.config.hotkeyLabel) { code, isModifier, mods, label in
+                runner.applyHotkey(code: code, isModifier: isModifier, modifiers: mods, label: label)
             }
-            Text("Custom hotkey picker — coming in a future update")
-                .font(.caption).foregroundStyle(theme.ink4)
+            Text("Hold a modifier key (⌥ ⌘ ⌃ ⇧) for press-and-hold mode, or press any other key for toggle mode. Esc cancels.")
+                .font(.caption2).foregroundStyle(theme.ink4)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            row("Launch at Login", hint: "start Murmur automatically on login") {
+                Toggle("", isOn: Binding(
+                    get: { LaunchAtLogin.isEnabled },
+                    set: { LaunchAtLogin.isEnabled = $0 }
+                )).labelsHidden()
+            }
         }
     }
 
@@ -907,6 +969,123 @@ struct BenchmarkSheet: View {
     }
 }
 
+// MARK: - HotkeyRecorder
+
+struct HotkeyRecorder: View {
+    let currentLabel: String
+    let onSelect: (Int, Bool, Int, String) -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var isRecording    = false
+    @State private var recordMonitors: [Any] = []
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(isRecording ? "Press a key…" : currentLabel)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(isRecording ? theme.accent : theme.ink)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(isRecording ? theme.accentSoft : theme.paper2)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(isRecording ? theme.accent.opacity(0.6) : theme.hair,
+                                lineWidth: isRecording ? 1.5 : 0.5)
+                )
+                .animation(.easeInOut(duration: 0.15), value: isRecording)
+            Spacer()
+            Button(isRecording ? "Cancel" : "Change") {
+                isRecording ? stopRecording() : startRecording()
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+
+    private func startRecording() {
+        isRecording = true
+
+        let handleFlags: (NSEvent) -> Void = { event in
+            guard Self.modifierKeyCodes.contains(event.keyCode) else { return }
+            guard Self.isModifierGoingDown(event) else { return }
+            let code = Int(event.keyCode)
+            let lbl  = Self.modifierLabel(event.keyCode)
+            DispatchQueue.main.async {
+                onSelect(code, true, 0, lbl)
+                stopRecording()
+            }
+        }
+
+        let handleKey: (NSEvent) -> Void = { event in
+            if event.keyCode == 53 { DispatchQueue.main.async { stopRecording() }; return }
+            let code = Int(event.keyCode)
+            let mods = Int(event.modifierFlags.intersection([.control, .option, .shift, .command]).rawValue)
+            let lbl  = Self.regularKeyLabel(event)
+            DispatchQueue.main.async {
+                onSelect(code, false, mods, lbl)
+                stopRecording()
+            }
+        }
+
+        // Global: fires when another app is frontmost
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: handleFlags) { recordMonitors.append(m) }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown,      handler: handleKey)   { recordMonitors.append(m) }
+
+        // Local: fires when Murmur itself is frontmost
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { handleFlags($0); return $0 }) { recordMonitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown,      handler: { handleKey($0);   return $0 }) { recordMonitors.append(m) }
+    }
+
+    private func stopRecording() {
+        isRecording = false
+        recordMonitors.forEach { NSEvent.removeMonitor($0) }
+        recordMonitors = []
+    }
+
+    static let modifierKeyCodes: Set<UInt16> = [54, 55, 56, 57, 58, 59, 60, 61, 62, 63]
+
+    static func isModifierGoingDown(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 58, 61: return event.modifierFlags.contains(.option)
+        case 55, 54: return event.modifierFlags.contains(.command)
+        case 59, 62: return event.modifierFlags.contains(.control)
+        case 56, 60: return event.modifierFlags.contains(.shift)
+        case 57:     return event.modifierFlags.contains(.capsLock)
+        default:     return false
+        }
+    }
+
+    static func modifierLabel(_ code: UInt16) -> String {
+        switch code {
+        case 61: return "Right ⌥"
+        case 58: return "Left ⌥"
+        case 54: return "Right ⌘"
+        case 55: return "Left ⌘"
+        case 62: return "Right ⌃"
+        case 59: return "Left ⌃"
+        case 60: return "Right ⇧"
+        case 56: return "Left ⇧"
+        case 63: return "Fn"
+        case 57: return "Caps Lock"
+        default: return "Key \(code)"
+        }
+    }
+
+    static func regularKeyLabel(_ event: NSEvent) -> String {
+        var parts: [String] = []
+        let flags = event.modifierFlags.intersection([.control, .option, .shift, .command])
+        if flags.contains(.control) { parts.append("⌃") }
+        if flags.contains(.option)  { parts.append("⌥") }
+        if flags.contains(.shift)   { parts.append("⇧") }
+        if flags.contains(.command) { parts.append("⌘") }
+        if let ch = event.charactersIgnoringModifiers?.uppercased(), !ch.isEmpty {
+            parts.append(ch)
+        } else {
+            parts.append("[\(event.keyCode)]")
+        }
+        return parts.joined()
+    }
+}
+
 // MARK: - ContentView
 
 struct ContentView: View {
@@ -994,7 +1173,7 @@ struct ContentView: View {
                 Text("Murmur")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(theme.ink)
-                Text("Hold Right ⌥ to dictate")
+                Text("Hold \(runner.config.hotkeyLabel) to dictate")
                     .font(.system(size: 11.5))
                     .foregroundStyle(theme.ink3)
             }
@@ -1084,5 +1263,90 @@ struct SettingRow<Control: View>: View {
             .frame(width: 130, alignment: .leading)
             control()
         }
+    }
+}
+
+// MARK: - Menu Bar
+
+struct MenuBarIcon: View {
+    let state: AppState
+
+    var body: some View {
+        Image(systemName: iconName)
+            .symbolRenderingMode(state == .recording ? .multicolor : .monochrome)
+    }
+
+    private var iconName: String {
+        switch state {
+        case .recording:    return "waveform.circle.fill"
+        case .transcribing: return "ellipsis.circle"
+        case .error:        return "exclamationmark.circle"
+        default:            return "waveform"
+        }
+    }
+}
+
+struct MenuBarMenu: View {
+    @ObservedObject var runner: ScriptRunner
+
+    var body: some View {
+        Text(statusLabel)
+            .foregroundStyle(.secondary)
+
+        Divider()
+
+        Button(runner.appState == .recording ? "Stop Recording" : "Start Recording") {
+            runner.toggleRecording()
+        }
+        .disabled(![.ready, .recording, .done].contains(runner.appState))
+
+        Divider()
+
+        Button("Show Window") {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows
+                .first { !($0 is NSPanel) }?
+                .makeKeyAndOrderFront(nil)
+        }
+
+        Divider()
+
+        Button("Quit Murmur") {
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
+    private var statusLabel: String {
+        switch runner.appState {
+        case .starting:     return "Starting…"
+        case .ready:        return "Ready"
+        case .recording:    return "Recording…"
+        case .transcribing: return "Transcribing…"
+        case .done:         return "Done"
+        case .error:        return "Error"
+        }
+    }
+}
+
+// MARK: - Launch at Login
+
+enum LaunchAtLogin {
+    static var isEnabled: Bool {
+        get { SMAppService.mainApp.status == .enabled }
+        set {
+            do {
+                if newValue { try SMAppService.mainApp.register() }
+                else        { try SMAppService.mainApp.unregister() }
+            } catch {
+                print("LaunchAtLogin error: \(error)", to: &standardError)
+            }
+        }
+    }
+}
+
+private var standardError = StandardErrorStream()
+private struct StandardErrorStream: TextOutputStream {
+    mutating func write(_ string: String) {
+        fputs(string, stderr)
     }
 }

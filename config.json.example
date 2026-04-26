@@ -7,5 +7,9 @@
   "model_size": "base",
   "beam_size": 5,
   "vad_filter": true,
-  "claude_api_key": ""
+  "claude_api_key": "",
+  "hotkey_code": 61,
+  "hotkey_is_modifier": true,
+  "hotkey_modifiers": 0,
+  "hotkey_label": "Right ⌥"
 }
