@@ -11,6 +11,11 @@ mkdir -p "$APP/Contents/Resources"
 
 cp "$DIR/Info.plist" "$APP/Contents/Info.plist"
 
+# Bundle Python backend into Resources
+cp "$DIR/murmur_backend.py" "$APP/Contents/Resources/murmur_backend.py"
+cp "$DIR/benchmark.py"      "$APP/Contents/Resources/benchmark.py"
+cp -R "$DIR/.venv"          "$APP/Contents/Resources/.venv"
+
 # Copy icon — fall back to the old bundle location during transition
 if [ -f "$DIR/AppIcon.icns" ]; then
     cp "$DIR/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"

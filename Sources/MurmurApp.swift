@@ -2,7 +2,7 @@ import SwiftUI
 import ApplicationServices
 import CoreGraphics
 
-private let projectRoot: URL = Bundle.main.bundleURL.deletingLastPathComponent()
+private let projectRoot: URL = Bundle.main.resourceURL ?? Bundle.main.bundleURL.deletingLastPathComponent()
 
 // MARK: - Config
 
