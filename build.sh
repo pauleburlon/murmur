@@ -11,10 +11,18 @@ mkdir -p "$APP/Contents/Resources"
 
 cp "$DIR/Info.plist" "$APP/Contents/Info.plist"
 
-# Bundle Python backend into Resources
-cp "$DIR/murmur_backend.py" "$APP/Contents/Resources/murmur_backend.py"
-cp "$DIR/benchmark.py"      "$APP/Contents/Resources/benchmark.py"
-cp -R "$DIR/.venv"          "$APP/Contents/Resources/.venv"
+# Bundle standalone binaries into Resources
+"$DIR/.venv/bin/pyinstaller" --onefile "$DIR/murmur_backend.py" \
+  --distpath "$APP/Contents/Resources" \
+  --workpath /tmp/murmur_build \
+  --specpath /tmp/murmur_build \
+  --name murmur_backend
+
+"$DIR/.venv/bin/pyinstaller" --onefile "$DIR/benchmark.py" \
+  --distpath "$APP/Contents/Resources" \
+  --workpath /tmp/murmur_build \
+  --specpath /tmp/murmur_build \
+  --name murmur_benchmark
 
 # Copy icon — fall back to the old bundle location during transition
 if [ -f "$DIR/AppIcon.icns" ]; then

@@ -113,16 +113,15 @@ final class ScriptRunner: ObservableObject {
 
     func start() {
         saveConfig(config)
-        let python = projectRoot.appendingPathComponent(".venv/bin/python").path
-        let script = projectRoot.appendingPathComponent("murmur_backend.py").path
+        let backend = projectRoot.appendingPathComponent("murmur_backend").path
 
-        guard FileManager.default.fileExists(atPath: python) else {
-            status = ".venv/bin/python not found"; appState = .error; return
+        guard FileManager.default.fileExists(atPath: backend) else {
+            status = "murmur_backend not found"; appState = .error; return
         }
 
         let p = Process()
-        p.executableURL      = URL(fileURLWithPath: python)
-        p.arguments          = [script]
+        p.executableURL      = URL(fileURLWithPath: backend)
+        p.arguments          = []
         p.currentDirectoryURL = projectRoot
 
         let outPipe = Pipe(), inPipe = Pipe()
@@ -871,11 +870,10 @@ struct BenchmarkSheet: View {
 
     private func runBenchmark() {
         phase = "countdown"; countdown = 6; results = []; currentIndex = 0
-        let python = projectRoot.appendingPathComponent(".venv/bin/python").path
-        let script = projectRoot.appendingPathComponent("benchmark.py").path
+        let benchmark = projectRoot.appendingPathComponent("murmur_benchmark").path
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: python)
-        p.arguments = [script]; p.currentDirectoryURL = projectRoot
+        p.executableURL = URL(fileURLWithPath: benchmark)
+        p.arguments = []; p.currentDirectoryURL = projectRoot
         let outPipe = Pipe()
         p.standardOutput = outPipe; p.standardError = outPipe; process = p
 
